@@ -26,11 +26,12 @@ const (
 	won
 	lost
 	memorizing = iota
+	maxGridSize = 13
 )
 
 // Constantes para o inimigo
 const (
-	bulletSpeed = 0.25
+	bulletSpeed = 0.18
 	enemyY     = -1.6
 )
 
@@ -41,6 +42,9 @@ type Enemy struct {
 	prevErr       float64
 	bullets       []Bullet
 	lastShotTimer int
+	changeModeTimer int
+	killerMode 	  bool
+	targetX       float64
 	alive         bool
 }
 
@@ -49,6 +53,7 @@ type Bullet struct {
 	x, y    float64
 	dx, dy  float64
 	active  bool
+	owner   *Enemy // Referência ao inimigo que atirou esta bala
 	reflected bool
 }
 
@@ -60,39 +65,11 @@ func NewEnemy() *Enemy {
 		prevErr:       0,
 		bullets:       make([]Bullet, 0),
 		lastShotTimer: 0,
+		changeModeTimer: 0,
+		killerMode:    false,
+		targetX:       utils.RandomFloat64() * float64(gridSize-1),
 		alive:         true,
 	}
-}
-
-// calculatePID calcula o movimento baseado no controle PID
-func (e *Enemy) calculatePID(setpoint, currentPos float64) float64 {
-	var kp, ki, kd float64
-
-	// Ajusta as constantes do PID baseado na dificuldade
-	switch dificulty {
-	case 1: // Fácil - apenas proporcional
-		kp, ki, kd = 0.3, 0, 0
-	case 2: // Médio - proporcional + integral
-		kp, ki, kd = 0.3, 0.1, 0
-	case 3: // Difícil - PID completo
-		kp, ki, kd = 0.3, 0.1, 0.05
-	}
-
-	err := setpoint - currentPos
-	e.errAcum += err
-	derivative := err - e.prevErr
-
-	output := (kp * err) + (ki * e.errAcum) + (kd * derivative)
-	e.prevErr = err
-
-	// Limita a saída para movimento suave
-	if output > 1 {
-		output = 1
-	} else if output < -1 {
-		output = -1
-	}
-
-	return output
 }
 
 // Update atualiza a posição do inimigo e seus projéteis
@@ -101,10 +78,33 @@ func (e *Enemy) Update(playerX, playerY int) {
 		return
 	}
 
-	// Atualiza posição do inimigo usando PID
+	if e.changeModeTimer == 0 {
+		e.changeModeTimer = 6 * 60
+		e.setKillerMode(utils.CaraOuCoroa())
+		if !e.killerMode {
+			e.targetX = utils.RandomFloat64() * float64(gridSize-1)
+		}
+	} else {
+		e.changeModeTimer--
+	}
+
+	if !e.killerMode {
+		// No modo aleatório, move em direção ao alvo atual
+		movement := utils.RandomMoves(e.x, e.targetX, gridSize)
+		e.x += movement
+		
+		// Se chegou muito perto do alvo, escolhe um novo
+		if math.Abs(e.x - e.targetX) < 0.1 {
+			e.targetX = utils.RandomFloat64() * float64(gridSize-1)
+		}
+	} else {
+		// No modo killer, usa PID para seguir o jogador
+		e.x += utils.CalculatePID(float64(playerX), e.x, dificulty, e.errAcum, e.prevErr)
+	}
+	/* Atualiza posição do inimigo usando PID
 	targetX := float64(playerX)
 	movement := e.calculatePID(targetX, e.x)
-	e.x += movement
+	e.x += movement*/
 
 	// Mantém o inimigo dentro dos limites do grid
 	if e.x < 0 {
@@ -128,6 +128,7 @@ func (e *Enemy) Update(playerX, playerY int) {
 				dx:     0,
 				dy:     1,
 				active: true,
+				owner:  e,
 				reflected: false,
 			})
 			e.lastShotTimer = 60 * 1.5
@@ -139,6 +140,7 @@ func (e *Enemy) Update(playerX, playerY int) {
 				dx:     0,
 				dy:     1,
 				active: false,
+				owner:  e,
 				reflected: false,
 			})
 			e.lastShotTimer = 60 * 1.5
@@ -205,6 +207,20 @@ func (e *Enemy) Draw(screen *ebiten.Image, offsetX, offsetY int) {
 	}
 }
 
+func (e *Enemy) setKillerMode(mode bool) {
+	// Se está entrando no modo killer
+	if mode && !e.killerMode {
+		// Só entra se não exceder o limite
+		if killersCount < maxKillers {
+			e.killerMode = true
+			killersCount++
+		}
+	} else if !mode && e.killerMode { // Se está saindo do modo killer
+		e.killerMode = false
+		killersCount--
+	}
+}
+
 func setup(L int) (int, map[int]bool){
 	graph := utils.GenerateGraph(L)
 	target := utils.GenerateTreasure(L) 
@@ -253,6 +269,8 @@ func init() {
 }
 
 var (
+	killersCount = 0 // Número atual de inimigos em modo killer
+	maxKillers   = 3 // Máximo de inimigos em modo killer simultaneamente
 	initialTarget, initialTraps = setup(gridSize)
 	initialFallenTraps = make(map[int]bool)
 	mplusNormalFont            font.Face
@@ -261,24 +279,39 @@ var (
 	nodeSize     = gridWidth / gridSize
 	dificulty    = 1
 	memorizeTime = 30 * 60 // 10 seconds in frames (60 FPS)
-	gameTime   = 40 * 60
+	gameTime   = 15 * 60
 	lives = 2
 	restart = false
-	enemy = NewEnemy()
+	enemies = make([]*Enemy, 0) // Lista de inimigos ativos
 	rocks = make([]Rock, 0) // Lista de pedras ativas
 )
 
+func createEnemies() []*Enemy {
+	numEnemies := (gridSize - 6) // Começa com 1 inimigo no grid 7, +1 a cada 2 níveis
+	if numEnemies > 3 {
+		numEnemies = 6 // Máximo de 3 inimigos
+	}
+	
+	newEnemies := make([]*Enemy, numEnemies)
+	spacing := float64(gridSize) / float64(numEnemies+1)
+	for i := range newEnemies {
+		newEnemies[i] = NewEnemy()
+		newEnemies[i].x = spacing * float64(i+1) // Distribui os inimigos uniformemente
+	}
+	return newEnemies
+}
+
 func levelUp() {
 	dificulty++
-	if dificulty == 4 {
+	if dificulty == 4 && gridSize < maxGridSize {
 		dificulty = 1
-		gameTime += 60 * 5
+		gameTime += 60 * 2
 		gridSize++
 		if gridSize % 2 == 0 {
 			lives++
 		}
 	}
-
+	enemies = createEnemies()
 	nodeSize = gridWidth / gridSize
 }
 
@@ -307,6 +340,7 @@ type Rock struct {
 }
 
 func NewGame() *Game {
+	enemies = createEnemies() // Inicializa inimigos
 	return &Game{
 		playerX:    0,  // Start outside the grid
 		playerY:    -1,   // At the first row level
@@ -316,7 +350,7 @@ func NewGame() *Game {
 		showTraps:  true,
 		gameTimer:  gameTime,
 		lives:      lives,
-		rocks:      5, // Começa com 3 pedras
+		rocks:      5,
 		aimX:       0,
 		aimY:       0,
 		aiming:     false,
@@ -463,7 +497,10 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		text.Draw(screen, g.message, mplusNormalFont, int(msgX), sh/2, color.RGBA{255, 0, 255, 255})
 	}
 	if g.gameState == playing {
-	enemy.Draw(screen, offsetX, offsetY)
+		// Desenha todos os inimigos
+		for _, e := range enemies {
+			e.Draw(screen, offsetX, offsetY)
+		}
 	}
 }
 
@@ -508,37 +545,47 @@ func (g *Game) Update() error {
 			g.gameState = lost
 			restart = true
 			resetFallenTraps()
-			g.message = "Atingido! Pressione R para tentar novamente"
+			g.message = "Atingido! Pressione R para reiniciar"
 			return nil
 		}
 
-		// Update enemy
-		enemy.Update(g.playerX, g.playerY)
+		// Update enemies
+		for _, e := range enemies {
+			e.Update(g.playerX, g.playerY)
+		}
 
-		// Check bullet collisions and handle reflection
-		for i := range enemy.bullets {
-			if enemy.bullets[i].active {
-				bulletGridX := int(math.Round(enemy.bullets[i].x))
-				bulletGridY := gridSize - 1 - int(math.Round(enemy.bullets[i].y))
-				
-				// Verifica se o jogador está tentando refletir o projétil
-				if inpututil.IsKeyJustPressed(ebiten.KeyV) {
-					// Verifica se o projétil está próximo o suficiente para ser refletido
-					if bulletGridX == g.playerX && math.Abs(float64(bulletGridY-g.playerY)) <= 1 {
-						enemy.bullets[i].dy = -1 // Inverte a direção do projétil
-						enemy.bullets[i].reflected = true
-						return nil
+		// Check bullet collisions for all enemies
+		for _, e := range enemies {
+			for i := range e.bullets {
+				if e.bullets[i].active && e.bullets[i].owner.alive && e.bullets[i].owner != nil {
+					bulletGridX := int(math.Round(e.bullets[i].x))
+					bulletGridY := gridSize - 1 - int(math.Round(e.bullets[i].y))
+		
+					// Verifica se o jogador está tentando refletir o projétil
+					if inpututil.IsKeyJustPressed(ebiten.KeyV) {
+						if bulletGridX == g.playerX && math.Abs(float64(bulletGridY-g.playerY)) <= 1.4 {
+							e.bullets[i].dy = -1
+							e.bullets[i].reflected = true
+							return nil
+						}
 					}
-				}
 
-				// Colisão normal se não foi refletido
-				if bulletGridX == g.playerX && bulletGridY == g.playerY && !enemy.bullets[i].reflected {
-					g.lives--
-					enemy.bullets[i].active = false
-					return nil
+					// Colisão normal se não foi refletido
+					if bulletGridX == g.playerX && bulletGridY == g.playerY && !e.bullets[i].reflected {
+						g.lives--
+						e.bullets[i].active = false
+						if g.lives <= 0 {
+							g.gameState = lost
+							restart = true
+							resetFallenTraps()
+							g.message = "Atingido! Pressione R para tentar novamente"
+							return nil
+						}
+					}
 				}
 			}
 		}
+		
 
 		// Handle rock throwing mechanics
 		if g.gameState == playing {
@@ -676,7 +723,7 @@ func (g *Game) Update() error {
 			g.message = ""
 			if restart {
 				g.gameTimer = gameTime
-				enemy = NewEnemy()
+				enemies = createEnemies() // Recria inimigos ao reiniciar
 				g.rocks = 5  // Reseta o número de pedras
 				rocks = make([]Rock, 0) // Limpa a lista de pedras e nós revelados
 				restart = false
@@ -685,6 +732,7 @@ func (g *Game) Update() error {
 				g.timer = memorizeTime
 				g.showTraps = true
 				g.message = fmt.Sprintf("Memorize em %d segundos!", g.timer/60)
+				killersCount = 0 // Reset do contador de killers
 			}
 		}
 		if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
@@ -697,9 +745,9 @@ func (g *Game) Update() error {
 				g.playerX = 0
 				g.playerY = -1
 				g.gameState = memorizing
+				enemies = createEnemies() // Recria inimigos ao reiniciar
 				g.gameTimer = gameTime
 				g.timer = memorizeTime
-				enemy = NewEnemy()
 				g.lives = lives
 				g.aiming = false
 				g.rocks = 5 // Reseta o número de pedras
@@ -728,7 +776,12 @@ func (g *Game) tryMove(dx, dy int) {
 			// Check for trap collision
 			if initialTraps[node] {
 				g.gameState = lost
-				g.message = "Você perdeu! Pressione R para reiniciar"
+				g.playerX = 0
+				g.playerY = -1
+				g.gameState = playing
+				g.showTraps = false
+				g.aiming = false
+				g.message = ""
 				updateFallenTraps(node)
 			}
 			

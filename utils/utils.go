@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"math"
 	"math/rand"
 	"time"
 )
@@ -138,4 +139,69 @@ func RussianRoulette(dificulty int) bool {
 		return grandTotal[randomInt] < 3
 	}
 	return true
+}
+
+func RandomFloat64() float64 {
+	return rand.Float64()
+}
+
+func RandomMoves(currentPos, targetPos float64, gridSize int) float64 {
+	// Se estiver próximo do alvo, escolhe um novo alvo
+	if math.Abs(currentPos - targetPos) < 0.1 {
+		// Retorna um valor entre -1 e 1 para indicar direção do movimento
+		return rand.Float64()*2 - 1
+	}
+
+	// Move suavemente em direção ao alvo atual
+	direction := targetPos - currentPos
+	speed := 0.05 // Ajuste este valor para controlar a suavidade do movimento
+
+	// Normaliza o movimento para ser mais suave
+	if math.Abs(direction) > speed {
+		if direction > 0 {
+			return speed
+		}
+		return -speed
+	}
+
+	return direction
+}
+
+// calculatePID calcula o movimento baseado no controle PID
+func CalculatePID(setpoint float64, currentPos float64, dificulty int, errAcum float64, prevErr float64) float64 {
+	var kp, ki, kd float64
+
+	// Ajusta as constantes do PID baseado na dificuldade
+	switch dificulty {
+	case 1: // Fácil - apenas proporcional
+		kp, ki, kd = 0.3, 0, 0
+	case 2: // Médio - proporcional + integral
+		kp, ki, kd = 0.3, 0.1, 0
+	case 3: // Difícil - PID completo
+		kp, ki, kd = 0.3, 0.1, 0.05
+	}
+
+	err := setpoint - currentPos
+	errAcum += err
+	derivative := err - prevErr
+
+	output := (kp * err) + (ki * errAcum) + (kd * derivative)
+	prevErr = err
+
+	// Limita a saída para movimento suave
+	if output > 1 {
+		output = 1
+	} else if output < -1 {
+		output = -1
+	}
+
+	return output
+}
+
+func CaraOuCoroa() bool {
+	r := rand.Intn(2)
+	if r == 0 {
+		return true
+	}
+	return false
 }
