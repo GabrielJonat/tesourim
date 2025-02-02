@@ -30,7 +30,7 @@ const (
 
 // Constantes para o inimigo
 const (
-	bulletSpeed = 0.2
+	bulletSpeed = 0.25
 	enemyY     = -1.6
 )
 
@@ -130,7 +130,7 @@ func (e *Enemy) Update(playerX, playerY int) {
 				active: true,
 				reflected: false,
 			})
-			e.lastShotTimer = 60 * 2
+			e.lastShotTimer = 60 * 1.5
 		}
 		if !utils.RussianRoulette(dificulty) {
 			e.bullets = append(e.bullets, Bullet{
@@ -141,7 +141,7 @@ func (e *Enemy) Update(playerX, playerY int) {
 				active: false,
 				reflected: false,
 			})
-			e.lastShotTimer = 60 * 2
+			e.lastShotTimer = 60 * 1.5
 		}
 		
 	}
@@ -260,8 +260,9 @@ var (
 	gridSize     = 6 // Number of rows and columns in the grid
 	nodeSize     = gridWidth / gridSize
 	dificulty    = 1
-	memorizeTime = 5 * 60 // 10 seconds in frames (60 FPS)
+	memorizeTime = 30 * 60 // 10 seconds in frames (60 FPS)
 	gameTime   = 40 * 60
+	lives = 2
 	restart = false
 	enemy = NewEnemy()
 	rocks = make([]Rock, 0) // Lista de pedras ativas
@@ -273,9 +274,11 @@ func levelUp() {
 		dificulty = 1
 		gameTime += 60 * 5
 		gridSize++
+		if gridSize % 2 == 0 {
+			lives++
+		}
 	}
-	memorizeTime += (60 * 0.7)
-	memorizeTime = memorizeTime % (20 * 60) 
+
 	nodeSize = gridWidth / gridSize
 }
 
@@ -312,8 +315,8 @@ func NewGame() *Game {
 		timer:      memorizeTime,
 		showTraps:  true,
 		gameTimer:  gameTime,
-		lives:      3,
-		rocks:      3, // Começa com 3 pedras
+		lives:      lives,
+		rocks:      5, // Começa com 3 pedras
 		aimX:       0,
 		aimY:       0,
 		aiming:     false,
@@ -548,6 +551,16 @@ func (g *Game) Update() error {
 
 			// Handle aiming
 			if g.aiming {
+				// Calculate distance from player
+				dx := g.aimX - g.playerX
+				dy := g.aimY - g.playerY
+				distance := math.Sqrt(float64(dx*dx + dy*dy))
+				maxDistance := 5.0
+				if distance > maxDistance {
+					angle := math.Atan2(float64(dy), float64(dx))
+					g.aimX = g.playerX + int(maxDistance * math.Cos(angle))
+					g.aimY = g.playerY + int(maxDistance * math.Sin(angle))
+				}
 				if inpututil.IsKeyJustPressed(ebiten.KeyLeft) || inpututil.IsKeyJustPressed(ebiten.KeyA) {
 					if g.aimX > 0 {
 						g.aimX--
@@ -577,10 +590,10 @@ func (g *Game) Update() error {
 					
 					// Create new rock
 					newRock := Rock{
-						x:       float64(g.playerX),
-						y:       float64(g.playerY),
-						targetX: g.aimX,
-						targetY: g.aimY,
+						x:       float64(g.playerX * nodeSize),
+						y:       float64((gridSize - 1 - g.playerY) * nodeSize),
+						targetX: g.aimX * nodeSize,
+						targetY: (gridSize - 1 - g.aimY) * nodeSize,
 						active:  true,
 						revealed: make(map[int]bool),
 					}
@@ -597,7 +610,6 @@ func (g *Game) Update() error {
 					rocks = append(rocks, newRock)
 					g.aiming = false
 				}
-
 			}
 
 			// Update rock positions
@@ -606,15 +618,21 @@ func (g *Game) Update() error {
 					// Calculate direction to target
 					dx := float64(rocks[i].targetX) - rocks[i].x
 					dy := float64(rocks[i].targetY) - rocks[i].y
-					dist := math.Sqrt(dx*dx + dy*dy)
-					
-					if dist < 0.1 {
+					length := math.Sqrt(dx*dx + dy*dy)
+					// Calculate distance and clamp to max 5 nodes
+					maxDistance := float64(5 * nodeSize) // 5 nós de distância
+					if length > maxDistance {
+						dx = dx * maxDistance / length
+						dy = dy * maxDistance / length
+						length = maxDistance
+					}
+					// Normalize and move
+					speed := 0.2
+					rocks[i].x += (dx / length) * speed
+					rocks[i].y += (dy / length) * speed
+					// Check if rock reached target
+					if length < 0.1 {
 						rocks[i].active = false
-					} else {
-						// Normalize and move
-						speed := 0.2
-						rocks[i].x += (dx / dist) * speed
-						rocks[i].y += (dy / dist) * speed
 					}
 				}
 			}
@@ -659,11 +677,11 @@ func (g *Game) Update() error {
 			if restart {
 				g.gameTimer = gameTime
 				enemy = NewEnemy()
-				g.rocks = 3 // Reseta o número de pedras
+				g.rocks = 5  // Reseta o número de pedras
 				rocks = make([]Rock, 0) // Limpa a lista de pedras e nós revelados
 				restart = false
 				g.gameState = memorizing
-				g.lives = 3
+				g.lives = lives
 				g.timer = memorizeTime
 				g.showTraps = true
 				g.message = fmt.Sprintf("Memorize em %d segundos!", g.timer/60)
@@ -682,9 +700,9 @@ func (g *Game) Update() error {
 				g.gameTimer = gameTime
 				g.timer = memorizeTime
 				enemy = NewEnemy()
-				g.lives = 3
+				g.lives = lives
 				g.aiming = false
-				g.rocks = 3 // Reseta o número de pedras
+				g.rocks = 5 // Reseta o número de pedras
 				rocks = make([]Rock, 0) // Limpa a lista de pedras e nós revelados
 				g.showTraps = true
 				g.message = fmt.Sprintf("Memorize em %d segundos!", g.timer/60)

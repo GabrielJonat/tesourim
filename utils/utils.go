@@ -135,7 +135,7 @@ func RussianRoulette(dificulty int) bool {
 		return grandTotal[randomInt] % 2 == 0
 	}
 	if dificulty == 1 {
-		return grandTotal[randomInt] < 2
+		return grandTotal[randomInt] < 3
 	}
 	return true
 }
