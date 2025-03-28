@@ -1,23 +1,28 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"image"
 	"example/tesourim/utils"
 	"image/color"
 	"log"
 	"math"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	"golang.org/x/image/font/opentype"
-	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"embed"
 )
 
 //go:embed assets/fonts
 var fontFS embed.FS
+
+//go:embed assets/sprites
+var spritesFS embed.FS
 
 const (
 	gridWidth    = 600
@@ -46,6 +51,7 @@ type Enemy struct {
 	killerMode 	  bool
 	targetX       float64
 	alive         bool
+	sprite        *EnemySprite
 }
 
 // Bullet representa um projétil
@@ -69,6 +75,7 @@ func NewEnemy() *Enemy {
 		killerMode:    false,
 		targetX:       utils.RandomFloat64() * float64(gridSize-1),
 		alive:         true,
+		sprite:        NewEnemySprite(100, 60, 10), // Ajuste os valores conforme o tamanho do seu sprite
 	}
 }
 
@@ -86,6 +93,17 @@ func (e *Enemy) Update(playerX, playerY int) {
 		}
 	} else {
 		e.changeModeTimer--
+	}
+
+	// Atualiza o sprite do inimigo
+	if e.sprite != nil {
+		e.sprite.Update()
+		// Define o estado do sprite baseado no movimento
+		if e.x != float64(playerX) {
+			e.sprite.SetState(EnemyStateMoving)
+		} else {
+			e.sprite.SetState(EnemyStateIdle)
+		}
 	}
 
 	if !e.killerMode {
@@ -189,7 +207,12 @@ func (e *Enemy) Draw(screen *ebiten.Image, offsetX, offsetY int) {
 	if e.alive {
 		enemyScreenX := float64(offsetX) + (e.x * float64(nodeSize))
 		enemyScreenY := float64(offsetY) + (float64(enemyY) * float64(nodeSize))
-		ebitenutil.DrawRect(screen, enemyScreenX, enemyScreenY, float64(nodeSize), float64(nodeSize), color.RGBA{255, 0, 0, 255})
+		if e.sprite != nil {
+			e.sprite.Draw(screen, enemyScreenX, enemyScreenY + 20)
+		}
+		if e.sprite == nil {
+			ebitenutil.DrawRect(screen, enemyScreenX, enemyScreenY, float64(nodeSize), float64(nodeSize), color.RGBA{255, 0, 0, 255})
+		}
 	}
 
 	// Desenha os projéteis
@@ -266,6 +289,18 @@ func init() {
 
 	// Carregar a fonte bold (usando a mesma fonte para bold por enquanto)
 	mplusBoldFont = mplusNormalFont
+
+	// Initialize player sprite
+	playerSprite = NewPlayerSprite(nodeSize, nodeSize, 4) // 4 frames of animation
+    
+    // Load sprite sheet
+    spriteData, err := spritesFS.ReadFile("assets/sprites/player_idle.png")
+    if err == nil {
+        img, _, err := image.Decode(bytes.NewReader(spriteData))
+        if err == nil {
+            playerSprite.spriteSheet = ebiten.NewImageFromImage(img)
+        }
+    }
 }
 
 var (
@@ -284,7 +319,206 @@ var (
 	restart = false
 	enemies = make([]*Enemy, 0) // Lista de inimigos ativos
 	rocks = make([]Rock, 0) // Lista de pedras ativas
+	playerSprite *PlayerSprite  // Add player sprite variable
+	endGame = false
 )
+
+// PlayerState representa o estado atual do jogador
+type PlayerState int
+
+type EnemyState int
+
+const (
+    PlayerStateIdle PlayerState = iota
+    PlayerStateAiming
+    EnemyStateIdle EnemyState = iota
+    EnemyStateMoving
+)
+
+type PlayerSprite struct {
+    spriteSheet    *ebiten.Image
+    frameWidth     int
+    frameHeight    int
+    frames         int
+    currentFrame   int
+    animationSpeed int
+    frameCount     int
+    currentState   PlayerState
+    idleSprite     *ebiten.Image
+    aimingSprite   *ebiten.Image
+}
+
+func NewPlayerSprite(frameWidth, frameHeight, frames int) *PlayerSprite {
+    ps := &PlayerSprite{
+        frameWidth:     frameWidth,
+        frameHeight:    frameHeight,
+        frames:         frames,
+        currentFrame:   0,
+        animationSpeed: 10,
+        frameCount:     0,
+        currentState:   PlayerStateIdle,
+    }
+    
+    // Carrega os sprites
+    ps.loadSprites()
+    return ps
+}
+
+type EnemySprite struct {
+    spriteSheet    *ebiten.Image
+    frameWidth     int
+    frameHeight    int
+    frames         int
+    currentFrame   int
+    animationSpeed int
+    frameCount     int
+    currentState   EnemyState
+    idleSprite     *ebiten.Image
+    movingSprite   *ebiten.Image
+}
+
+func NewEnemySprite(frameWidth, frameHeight, frames int) *EnemySprite {
+    es := &EnemySprite{
+        frameWidth:     frameWidth,
+        frameHeight:    frameHeight,
+        frames:         frames,
+        currentFrame:   0,
+        animationSpeed: 10,
+        frameCount:     0,
+        currentState:   EnemyStateIdle,
+    }
+    
+    // Carrega os sprites
+    es.loadSprites()
+    return es
+}
+
+func (ps *PlayerSprite) loadSprites() {
+    // Carrega o sprite idle
+    spriteData, err := spritesFS.ReadFile("assets/sprites/player_idle.png")
+    if err == nil {
+        img, _, err := image.Decode(bytes.NewReader(spriteData))
+        if err == nil {
+            ps.idleSprite = ebiten.NewImageFromImage(img)
+            ps.spriteSheet = ps.idleSprite
+        }
+    }
+
+    // Carrega o sprite de mira
+    aimingSpriteData, err := spritesFS.ReadFile("assets/sprites/player_aiming.png")
+    if err == nil {
+        img, _, err := image.Decode(bytes.NewReader(aimingSpriteData))
+        if err == nil {
+            ps.aimingSprite = ebiten.NewImageFromImage(img)
+        }
+    }
+}
+
+func (ps *PlayerSprite) SetState(state PlayerState) {
+    if ps.currentState != state {
+        ps.currentState = state
+        ps.currentFrame = 0
+        ps.frameCount = 0
+        
+        // Atualiza o spritesheet baseado no estado
+        switch state {
+        case PlayerStateIdle:
+            ps.spriteSheet = ps.idleSprite
+        case PlayerStateAiming:
+            ps.spriteSheet = ps.aimingSprite
+        }
+    }
+}
+
+func (es *EnemySprite) Update() {
+    es.frameCount++
+	if es.frameCount >= es.animationSpeed {
+		es.frameCount = 0
+		es.currentFrame = (es.currentFrame + 1) % es.frames
+	}
+}
+
+func (es *EnemySprite) Draw(screen *ebiten.Image, x, y float64) {
+    if es.spriteSheet == nil {
+        // Fallback to rectangle if sprite sheet not loaded
+        ebitenutil.DrawRect(screen, x, y, float64(nodeSize), float64(nodeSize), color.RGBA{0, 0, 255, 255})
+        return
+    }
+
+    op := &ebiten.DrawImageOptions{}
+    
+    // Calculate scale factors
+    scaleX := float64(nodeSize) / float64(es.frameWidth)
+    scaleY := float64(nodeSize) / float64(es.frameHeight)
+    
+    // Apply scaling
+    op.GeoM.Scale(scaleX, scaleY)
+    
+    // Apply position after scaling
+    op.GeoM.Translate(x, y)
+    
+    // Draw current frame
+    sx := es.currentFrame * es.frameWidth
+    screen.DrawImage(es.spriteSheet.SubImage(image.Rect(
+        sx, 0,
+        sx + es.frameWidth, es.frameHeight,
+    )).(*ebiten.Image), op)
+}
+
+
+func (es *EnemySprite) loadSprites() {
+    // Carrega o sprite idle
+    spriteData, err := spritesFS.ReadFile("assets/sprites/Enemy.png")
+    if err == nil {
+        img, _, err := image.Decode(bytes.NewReader(spriteData))
+        if err == nil {
+            es.idleSprite = ebiten.NewImageFromImage(img)
+            es.spriteSheet = es.idleSprite
+        }
+    }
+}
+
+func (es *EnemySprite) SetState(state EnemyState) {
+	if es.currentState != state {
+		es.currentState = state
+		es.currentFrame = 0 // Reseta o frame quando muda de estado
+	}
+}
+
+func (ps *PlayerSprite) Update() {
+    ps.frameCount++
+    if ps.frameCount >= ps.animationSpeed {
+        ps.currentFrame = (ps.currentFrame + 1) % ps.frames
+        ps.frameCount = 0
+    }
+}
+
+func (ps *PlayerSprite) Draw(screen *ebiten.Image, x, y float64) {
+    if ps.spriteSheet == nil {
+        // Fallback to rectangle if sprite sheet not loaded
+        ebitenutil.DrawRect(screen, x, y, float64(nodeSize), float64(nodeSize), color.RGBA{0, 0, 255, 255})
+        return
+    }
+
+    op := &ebiten.DrawImageOptions{}
+    
+    // Calculate scale factors
+    scaleX := float64(nodeSize) / float64(ps.frameWidth)
+    scaleY := float64(nodeSize) / float64(ps.frameHeight)
+    
+    // Apply scaling
+    op.GeoM.Scale(scaleX, scaleY)
+    
+    // Apply position after scaling
+    op.GeoM.Translate(x, y)
+    
+    // Draw current frame
+    sx := ps.currentFrame * ps.frameWidth
+    screen.DrawImage(ps.spriteSheet.SubImage(image.Rect(
+        sx, 0,
+        sx + ps.frameWidth, ps.frameHeight,
+    )).(*ebiten.Image), op)
+}
 
 func createEnemies() []*Enemy {
 	numEnemies := (gridSize - 6) // Começa com 1 inimigo no grid 7, +1 a cada 2 níveis
@@ -311,6 +545,9 @@ func levelUp() {
 			lives++
 		}
 	}
+	if gridSize == 18{
+		endGame = true
+	}
 	enemies = createEnemies()
 	nodeSize = gridWidth / gridSize
 }
@@ -328,6 +565,7 @@ type Game struct{
 	aimX       int     // Aiming position X
 	aimY       int     // Aiming position Y
 	aiming     bool    // Whether player is currently aiming
+	endGameTimer int   // Timer for end game countdown
 }
 
 // Rock represents a thrown rock
@@ -354,6 +592,7 @@ func NewGame() *Game {
 		aimX:       0,
 		aimY:       0,
 		aiming:     false,
+		endGameTimer: 0,
 	}
 }
 
@@ -434,19 +673,22 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	ebitenutil.DrawLine(screen, float64(offsetX), lastY, lastX, lastY, color.Black)
 	// Draw the player
 	if g.playerX >= 0 && g.playerY >= -1 {
-		playerScreenX := float64(offsetX + (g.playerX * nodeSize))
-		playerScreenY := float64(offsetY + ((gridSize-1-g.playerY) * nodeSize))
-		ebitenutil.DrawRect(screen, playerScreenX, playerScreenY, float64(nodeSize), float64(nodeSize), color.RGBA{0, 0, 255, 255})
-	}
+        playerScreenX := float64(offsetX) + float64(g.playerX*nodeSize)
+        playerScreenY := float64(offsetY) + float64((gridSize-1-g.playerY)*nodeSize)  // Fix Y coordinate calculation
+        playerSprite.Draw(screen, playerScreenX, playerScreenY )
+    }
 	
 	// Draw aiming crosshair when in aiming mode
 	if g.aiming {
+		playerSprite.SetState(PlayerStateAiming)
 		aimScreenX := float64(offsetX) + (float64(g.aimX) * float64(nodeSize)) + float64(nodeSize)/2
 		aimScreenY := float64(offsetY) + (float64(gridSize-1-g.aimY) * float64(nodeSize)) + float64(nodeSize)/2
 		
 		// Draw crosshair
 		ebitenutil.DrawLine(screen, aimScreenX-10, aimScreenY, aimScreenX+10, aimScreenY, color.RGBA{255, 0, 0, 255})
 		ebitenutil.DrawLine(screen, aimScreenX, aimScreenY-10, aimScreenX, aimScreenY+10, color.RGBA{255, 0, 0, 255})
+	} else {
+		playerSprite.SetState(PlayerStateIdle)
 	}
 
 	// Draw rocks counter
@@ -481,11 +723,10 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			y := float64(offsetY) + (float64(gridSize-1-row) * float64(nodeSize))
 			
 			if node == initialTarget {
-				ebitenutil.DrawRect(screen, x, y, float64(nodeSize), float64(nodeSize), color.RGBA{0, 255, 0, 128})
+				ebitenutil.DrawRect(screen, x, y, float64(nodeSize), float64(nodeSize), color.RGBA{0, 255, 0, 255})
 			} else if initialTraps[node] {
-				ebitenutil.DrawRect(screen, x, y, float64(nodeSize), float64(nodeSize), color.RGBA{255, 0, 0, 128})
-			} else {
-				ebitenutil.DrawRect(screen, x, y, float64(nodeSize), float64(nodeSize), color.RGBA{200, 200, 200, 128})
+				updateFallenTraps(node)
+				
 			}
 		}
 	}
@@ -506,6 +747,17 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 // Update handles the game state (not needed here).
 func (g *Game) Update() error {
+
+	if endGame {
+		g.message = fmt.Sprintf("Parabéns! você venceu o jogo!")
+		if g.endGameTimer == 0 {
+			g.endGameTimer = 180 // 3 segundos a 60 FPS
+		}
+		g.endGameTimer--
+		if g.endGameTimer <= 0 {
+			return ebiten.Termination
+		}
+	}
 	// Check if ESC key is pressed to exit the game
 	if ebiten.IsKeyPressed(ebiten.KeyEscape) {
 		return ebiten.Termination
@@ -730,6 +982,7 @@ func (g *Game) Update() error {
 				g.gameState = memorizing
 				g.lives = lives
 				g.timer = memorizeTime
+				resetFallenTraps()
 				g.showTraps = true
 				g.message = fmt.Sprintf("Memorize em %d segundos!", g.timer/60)
 				killersCount = 0 // Reset do contador de killers
@@ -756,6 +1009,7 @@ func (g *Game) Update() error {
 				g.message = fmt.Sprintf("Memorize em %d segundos!", g.timer/60)
 			}
 		}
+		playerSprite.Update()
 	return nil
 }
 
